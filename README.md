@@ -160,7 +160,7 @@ Dreamer needs **1.6× fewer steps** to reach 50% success in both tasks.
 ### **Train PPO**
 ```bash
 ./isaaclab.sh -p isaaclab_quadcopter/ppo/train_corridor_ppo.py --num_envs 16
-
+```
 
 commands:
   train_dreamer:
