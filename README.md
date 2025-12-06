@@ -161,50 +161,55 @@ Dreamer needs **1.6× fewer steps** to reach 50% success in both tasks.
 ```bash
 ./isaaclab.sh -p isaaclab_quadcopter/ppo/train_corridor_ppo.py --num_envs 16
 ```
+Train Dreamer
+```bash
+./isaaclab.sh -p isaaclab_quadcopter/dreamer/train_simple_dreamer.py --num_envs 16
+```
 
-commands:
-  train_dreamer:
-    description: "Train the Simple Dreamer agent in Isaac Lab"
-    command: "./isaaclab.sh -p isaaclab_quadcopter/dreamer/train_simple_dreamer.py --num_envs 16"
+Compare PPO vs Dreamer
+```bash
+./_isaac_sim/python.sh isaaclab_quadcopter/eval/compare_training.py \
+    --ppo raw_logs/ppo_obstacle.json \
+    --dreamer raw_logs/dreamer_obstacle.json \
+    --output results/comparison_obstacle.png
+```
+Watch a Drone Fly
+```bash
+./isaaclab.sh -p isaaclab_quadcopter/eval/watch_drone.py \
+    --checkpoint checkpoints_dreamer/best.pt \
+    --obstacle
+```
 
-  compare_results:
-    description: "Compare PPO vs Dreamer results on the obstacle task"
-    command: >
-      ./_isaac_sim/python.sh isaaclab_quadcopter/eval/compare_training.py
-      --ppo raw_logs/ppo_obstacle.json
-      --dreamer raw_logs/dreamer_obstacle.json
-      --output results/comparison_obstacle.png
+🧪 Reproducibility
 
-  watch_drone:
-    description: "Visualize a trained Dreamer agent navigating the corridor"
-    command: >
-      ./isaaclab.sh -p isaaclab_quadcopter/eval/watch_drone.py
-      --checkpoint checkpoints_dreamer/best.pt
-      --obstacle
+Raw logs for all experiments are stored in:
+```bash
+isaaclab_quadcopter/raw_logs/
+```
 
-reproducibility:
-  raw_logs_directory: "isaaclab_quadcopter/raw_logs/"
-  contents:
-    - success rates
-    - crash breakdown statistics
-    - average distance per episode
-    - training curves (PPO & Dreamer)
-    - Dreamer diagnostics (world model losses, actor-critic losses)
-  note: "All logs can be re-evaluated or re-plotted independently using the evaluation scripts."
+This includes:
+success rates
+crash breakdown
+average distance
+training curves
+diagnostics
+These logs can be re-evaluated or plotted independently.
 
-citation:
-  format: "bibtex"
-  entry: |
-    @software{IsaacLabQuadcopter2025,
-      author = {Philip, Sandeep John},
-      title = {Quadcopter Corridor Navigation: PPO vs Dreamer in Isaac Lab},
-      year = {2025},
-      url = {https://github.com/razarcon3/PyDreamerV1-DRL}
-    }
+📘 Citation
 
-acknowledgements:
-  - "NVIDIA Isaac Lab Team"
-  - "PyDreamer original authors (Hafner et al.)"
-  - "Georgia Tech CS 8803 DRL Course"
-  - "Collaborators & reviewers"
+If you use this work, please cite:
+
+@software{IsaacLabQuadcopter2025,
+  author = {Philip, Sandeep John},
+  title = {Quadcopter Corridor Navigation: PPO vs Dreamer in Isaac Lab},
+  year = {2025},
+  url = {https://github.com/razarcon3/PyDreamerV1-DRL}
+}
+
+🙌 Acknowledgements
+
+NVIDIA Isaac Lab team
+PyDreamer original authors (Hafner et al.)
+Georgia Tech DRL course (CS 8803 DRL)
+Collaborators & reviewers
 
