@@ -1,35 +1,3 @@
-"""
-QUADCOPTER CORRIDOR ENVIRONMENT - CLEAN VERSION
-================================================
-
-Goal: Fly down a corridor, avoid obstacle, reach the end.
-
-Inputs (Observations - 47 dims):
-    - 32 lidar rays: normalized distance to walls/obstacles (0=touching, 1=max range)
-    - 3 body velocities: vx, vy, vz (normalized by max_velocity)
-    - 3 angular velocities: roll rate, pitch rate, yaw rate
-    - 3 orientation: roll, pitch, yaw angles
-    - 3 position: x_progress (0-1), y_centered (-1 to 1), z_altitude
-    - 2 lidar summary: min_distance, mean_distance
-    - 1 time_remaining: fraction of episode left
-
-Outputs (Actions - 3 dims):
-    - action[0]: forward velocity command  (-1 to +1) -> (-1.5 to +1.5 m/s)
-    - action[1]: lateral velocity command  (-1 to +1) -> (-0.5 to +0.5 m/s)  
-    - action[2]: yaw rate command          (-1 to +1) -> (-0.5 to +0.5 rad/s)
-
-Rewards:
-    - Forward progress: reward for moving toward goal
-    - Crash penalty: -50 for hitting walls/ground/obstacle
-    - Success bonus: +100 for reaching goal
-    - Small time penalty: encourages efficiency
-
-Episode ends when:
-    - SUCCESS: Drone reaches 95% of corridor length
-    - CRASH: Drone hits wall, ground, ceiling, or obstacle
-    - TIMEOUT: Episode time limit reached
-"""
-
 from __future__ import annotations
 import torch
 import math
@@ -74,17 +42,14 @@ def get_crazyflie_cfg():
 
 @configclass
 class CorridorEnvCfg(DirectRLEnvCfg):
-    """Configuration for the corridor navigation environment."""
+    """Configuration for corridor navigation environment."""
     
-    # Episode settings
-    episode_length_s: float = 20.0  # 20 second episodes
+    episode_length_s: float = 20.0
     decimation: int = 2
     
-    # Observation and action dimensions
     observation_space: int = 47
     action_space: int = 3
     
-    # Simulation
     sim: SimulationCfg = SimulationCfg(dt=1/100, render_interval=2)
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=32,
@@ -93,45 +58,34 @@ class CorridorEnvCfg(DirectRLEnvCfg):
     )
     robot: ArticulationCfg = None
     
-    # Corridor geometry
-    corridor_length: float = 10.0  # meters
-    corridor_width: float = 4.0    # meters
-    corridor_height: float = 2.0   # meters
+    corridor_length: float = 10.0
+    corridor_width: float = 4.0
+    corridor_height: float = 2.0
     
-    # Drone settings
-    target_altitude: float = 0.5   # meters
-    max_velocity: float = 2.0      # m/s
-    drone_radius: float = 0.15     # meters (for collision)
-    drone_height: float = 0.10     # meters
+    target_altitude: float = 0.5
+    max_velocity: float = 2.0
+    drone_radius: float = 0.15
+    drone_height: float = 0.10
     
-    # Control gains
-    kp_z: float = 25.0   # Altitude P gain
-    kd_z: float = 8.0    # Altitude D gain
-    max_horiz_force: float = 0.15  # N
-    max_yaw_torque: float = 0.002  # N·m
+    kp_z: float = 25.0
+    kd_z: float = 8.0
+    max_horiz_force: float = 0.15
+    max_yaw_torque: float = 0.002
     
-    # Lidar settings
     num_lidar_rays: int = 32
     lidar_fov_degrees: float = 120.0
     lidar_max_range: float = 5.0
     
-    # Obstacle settings
     obstacle_enabled: bool = True
-    obstacle_x: float = 6.0        # meters from start
-    obstacle_y: float = 0.0        # lateral position (0 = center)
-    obstacle_size: float = 0.8     # meters (width/depth of obstacle)
+    obstacle_x: float = 6.0
+    obstacle_y: float = 0.0
+    obstacle_size: float = 0.8
     
-    # Success threshold
-    goal_threshold: float = 0.95   # Reach 95% of corridor to succeed
+    goal_threshold: float = 0.95
 
 
 class CorridorEnv(DirectRLEnv):
-    """
-    Quadcopter corridor navigation environment.
-    
-    The drone must fly from start (x=0) to end (x=corridor_length),
-    avoiding walls and an obstacle in the middle.
-    """
+    """Quadcopter corridor navigation environment."""
     
     cfg: CorridorEnvCfg
     
@@ -144,34 +98,33 @@ class CorridorEnv(DirectRLEnv):
         device = self.device
         n = self.num_envs
         
-        # Force/torque buffers for control
+        # Force and torque buffers for applying control commands
         self._thrust = torch.zeros(n, 1, 3, device=device)
         self._moment = torch.zeros(n, 1, 3, device=device)
         self._body_id = self._robot.find_bodies("body")[0]
         
-        # Physical properties
+        # Compute physical properties of the drone
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
         self._gravity = torch.tensor(self.sim.cfg.gravity, device=device).norm()
         self._hover_thrust = (self._robot_mass * self._gravity).item()
         
-        # Episode tracking - PER ENVIRONMENT
-        self._episode_max_x = torch.zeros(n, device=device)      # Max x reached this episode
-        self._episode_start_x = torch.zeros(n, device=device)    # Starting x (always 0)
-        self._prev_x = torch.zeros(n, device=device)             # Previous step x for delta
+        # Episode tracking per environment
+        self._episode_max_x = torch.zeros(n, device=device)
+        self._episode_start_x = torch.zeros(n, device=device)
+        self._prev_x = torch.zeros(n, device=device)
         
-        # Statistics tracking - CUMULATIVE across all episodes
+        # Statistics tracking across all episodes
         self._stats_episodes_completed = 0
         self._stats_successes = 0
         self._stats_crashes = 0
         self._stats_timeouts = 0
-        self._stats_total_distance = 0.0  # Sum of max distances from completed episodes
+        self._stats_total_distance = 0.0
         self._stats_crash_types = {"ground": 0, "ceiling": 0, "wall": 0, "obstacle": 0}
         
-        # Lidar angles (precomputed)
+        # Precompute lidar ray angles
         fov = math.radians(cfg.lidar_fov_degrees)
         self._lidar_angles = torch.linspace(-fov/2, fov/2, cfg.num_lidar_rays, device=device)
         
-        # Goal position
         self._goal_x = cfg.corridor_length * cfg.goal_threshold
         
         self._print_env_info()
@@ -194,21 +147,17 @@ class CorridorEnv(DirectRLEnv):
         print(f"Environments: {self.num_envs} parallel")
         print("=" * 60 + "\n")
     
-    # ==================== SCENE SETUP ====================
-    
     def _setup_scene(self):
-        """Create the corridor environment with walls and obstacle."""
+        """Create corridor with walls and obstacle."""
         cfg = self.cfg
         
-        # Robot
         self._robot = Articulation(cfg.robot)
         self.scene.articulations["robot"] = self._robot
         
-        # Ground plane
         ground_cfg = sim_utils.GroundPlaneCfg()
         ground_cfg.func("/World/ground", ground_cfg)
         
-        # Corridor walls
+        # Create corridor walls
         wall_length = cfg.corridor_length + 2.0
         half_width = cfg.corridor_width / 2
         
@@ -218,21 +167,19 @@ class CorridorEnv(DirectRLEnv):
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.7, 0.7, 0.7)),
         )
         
-        # Left wall (negative Y)
         wall_cfg.func(
             "/World/envs/env_./WallLeft",
             wall_cfg,
             translation=(cfg.corridor_length/2, -half_width - 0.05, cfg.corridor_height/2),
         )
         
-        # Right wall (positive Y)
         wall_cfg.func(
             "/World/envs/env_./WallRight", 
             wall_cfg,
             translation=(cfg.corridor_length/2, half_width + 0.05, cfg.corridor_height/2),
         )
         
-        # Obstacle (if enabled)
+        # Add obstacle if enabled
         if cfg.obstacle_enabled:
             obs_cfg = sim_utils.CuboidCfg(
                 size=(cfg.obstacle_size, cfg.obstacle_size, cfg.corridor_height),
@@ -245,20 +192,15 @@ class CorridorEnv(DirectRLEnv):
                 translation=(cfg.obstacle_x, cfg.obstacle_y, cfg.corridor_height/2),
             )
         
-        # Clone environments
         self.scene.clone_environments(copy_from_source=False)
         
-        # Lighting
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0)
         light_cfg.func("/World/light", light_cfg)
-    
-    # ==================== CONTROL ====================
     
     def _quat_to_rotation_matrix(self, quat: torch.Tensor) -> torch.Tensor:
         """Convert quaternion [w,x,y,z] to 3x3 rotation matrix."""
         w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
         
-        # Normalize
         norm = torch.sqrt(w*w + x*x + y*y + z*z + 1e-8)
         w, x, y, z = w/norm, x/norm, y/norm, z/norm
         
@@ -284,14 +226,7 @@ class CorridorEnv(DirectRLEnv):
         )
     
     def _pre_physics_step(self, actions: torch.Tensor):
-        """
-        Convert velocity commands to body forces.
-        
-        Actions (all normalized -1 to +1):
-            [0] forward velocity  -> -1.5 to +1.5 m/s
-            [1] lateral velocity  -> -0.5 to +0.5 m/s
-            [2] yaw rate          -> -0.5 to +0.5 rad/s
-        """
+        """Convert velocity commands to body forces."""
         actions = actions.clamp(-1.0, 1.0)
         
         pos_w = self._robot.data.root_pos_w
@@ -299,25 +234,23 @@ class CorridorEnv(DirectRLEnv):
         ang_vel_b = self._robot.data.root_ang_vel_b
         quat_w = self._robot.data.root_quat_w
         
-        # Rotation matrix: body -> world
         R = self._quat_to_rotation_matrix(quat_w)
         
-        # === Altitude control (PD controller) ===
+        # PD controller for altitude regulation
         z_error = self.cfg.target_altitude - pos_w[:, 2]
         vz_error = -vel_w[:, 2]
         
         thrust_z = self._hover_thrust + self.cfg.kp_z * z_error + self.cfg.kd_z * vz_error
         thrust_z = thrust_z.clamp(0.5 * self._hover_thrust, 1.5 * self._hover_thrust)
         
-        # === Horizontal velocity control ===
-        vx_desired = actions[:, 0] * 1.5  # m/s forward
-        vy_desired = actions[:, 1] * 0.5  # m/s lateral
+        # Horizontal velocity control from actions
+        vx_desired = actions[:, 0] * 1.5
+        vy_desired = actions[:, 1] * 0.5
         
         vx_error = vx_desired - vel_w[:, 0]
         vy_error = vy_desired - vel_w[:, 1]
         
-        # Simple proportional control with force limits
-        max_accel = 4.0  # m/s^2
+        max_accel = 4.0
         Fx = (self._robot_mass * max_accel * vx_error.clamp(-1, 1)).clamp(
             -self.cfg.max_horiz_force, self.cfg.max_horiz_force
         )
@@ -325,32 +258,26 @@ class CorridorEnv(DirectRLEnv):
             -self.cfg.max_horiz_force * 0.5, self.cfg.max_horiz_force * 0.5
         )
         
-        # Transform world forces to body frame
+        # Transform forces to body frame
         F_world = torch.stack([Fx, Fy, thrust_z], dim=-1).unsqueeze(-1)
         F_body = torch.matmul(R.transpose(1, 2), F_world).squeeze(-1)
         
-        # === Yaw control ===
-        yaw_rate_desired = actions[:, 2] * 0.5  # rad/s
+        # Yaw rate control
+        yaw_rate_desired = actions[:, 2] * 0.5
         yaw_error = yaw_rate_desired - ang_vel_b[:, 2]
         yaw_torque = yaw_error * self.cfg.max_yaw_torque
         
-        # Store forces for application
         self._thrust[:, 0, :] = F_body
         self._moment[:, 0, 2] = yaw_torque
     
     def _apply_action(self):
-        """Apply computed forces to the robot."""
+        """Apply forces and torques to robot."""
         self._robot.set_external_force_and_torque(
             self._thrust, self._moment, body_ids=self._body_id
         )
     
-    # ==================== OBSERVATIONS ====================
-    
     def _compute_lidar(self) -> torch.Tensor:
-        """
-        Compute lidar readings for each environment.
-        Returns normalized distances (0 = collision, 1 = max range).
-        """
+        """Compute normalized lidar readings for all environments."""
         n = self.num_envs
         cfg = self.cfg
         max_range = cfg.lidar_max_range
@@ -369,47 +296,42 @@ class CorridorEnv(DirectRLEnv):
         
         distances = torch.full((n, cfg.num_lidar_rays), max_range, device=self.device)
         
-        # Check wall intersections
-        # Left wall (y = -half_w)
+        # Check left wall intersection
         t_left = (-half_w - y) / (ray_dy + 1e-8)
         valid = (t_left > 0) & (t_left < max_range) & (ray_dy.abs() > 1e-6)
         hit_x = x + t_left * ray_dx
         valid = valid & (hit_x >= 0) & (hit_x <= cfg.corridor_length)
         distances = torch.where(valid, torch.minimum(distances, t_left), distances)
         
-        # Right wall (y = +half_w)
+        # Check right wall intersection
         t_right = (half_w - y) / (ray_dy + 1e-8)
         valid = (t_right > 0) & (t_right < max_range) & (ray_dy.abs() > 1e-6)
         hit_x = x + t_right * ray_dx
         valid = valid & (hit_x >= 0) & (hit_x <= cfg.corridor_length)
         distances = torch.where(valid, torch.minimum(distances, t_right), distances)
         
-        # Check obstacle intersection (if enabled)
+        # Check obstacle intersection
         if cfg.obstacle_enabled:
             obs_x = cfg.obstacle_x
             obs_y = cfg.obstacle_y
-            obs_radius = cfg.obstacle_size / 2 * 1.414  # Diagonal for square obstacle
+            obs_radius = cfg.obstacle_size / 2 * 1.414
             
-            # Vector to obstacle center
             to_obs_x = obs_x - x
             to_obs_y = obs_y - y
             
-            # Project onto ray
             t_obs = to_obs_x * ray_dx + to_obs_y * ray_dy
             
-            # Closest point on ray to obstacle
             closest_x = x + t_obs * ray_dx
             closest_y = y + t_obs * ray_dy
             perp_dist = torch.sqrt((closest_x - obs_x)**2 + (closest_y - obs_y)**2)
             
-            # Check if ray hits obstacle
             valid = (t_obs > 0) & (t_obs < max_range) & (perp_dist < obs_radius)
             distances = torch.where(valid, torch.minimum(distances, t_obs), distances)
         
         return (distances / max_range).clamp(0, 1)
     
     def _get_observations(self) -> dict:
-        """Compute observations for all environments."""
+        """Compute observations: lidar, velocities, orientations, and position."""
         cfg = self.cfg
         
         lidar = self._compute_lidar()
@@ -420,76 +342,49 @@ class CorridorEnv(DirectRLEnv):
         quat = self._robot.data.root_quat_w
         gravity_b = self._robot.data.projected_gravity_b
         
-        # Normalize velocities
         vx = (vel_b[:, 0] / cfg.max_velocity).clamp(-1, 1)
         vy = (vel_b[:, 1] / cfg.max_velocity).clamp(-1, 1)
         vz = (vel_b[:, 2] / cfg.max_velocity).clamp(-1, 1)
         
-        # Normalize angular velocities
         omega_x = (ang_vel_b[:, 0] / 2.0).clamp(-1, 1)
         omega_y = (ang_vel_b[:, 1] / 2.0).clamp(-1, 1)
         omega_z = (ang_vel_b[:, 2] / 2.0).clamp(-1, 1)
         
-        # Orientation from gravity projection
         roll = torch.atan2(gravity_b[:, 1], -gravity_b[:, 2]) / math.pi
         pitch = torch.atan2(gravity_b[:, 0], -gravity_b[:, 2]) / math.pi
         yaw = self._get_yaw(quat) / math.pi
         
-        # Position (normalized)
         x_progress = (pos[:, 0] / cfg.corridor_length).clamp(0, 1)
         y_centered = (pos[:, 1] / (cfg.corridor_width / 2)).clamp(-1, 1)
         z_altitude = (pos[:, 2] / cfg.corridor_height).clamp(0, 1)
         
-        # Lidar summary
         min_dist = lidar.min(dim=1)[0]
         mean_dist = lidar.mean(dim=1)
         
-        # Time remaining
         time_left = (self.max_episode_length - self.episode_length_buf) / self.max_episode_length
         
         obs = torch.cat([
-            lidar,                          # 32
-            vx.unsqueeze(-1),               # 1
-            vy.unsqueeze(-1),               # 1
-            vz.unsqueeze(-1),               # 1
-            omega_x.unsqueeze(-1),          # 1
-            omega_y.unsqueeze(-1),          # 1
-            omega_z.unsqueeze(-1),          # 1
-            roll.unsqueeze(-1),             # 1
-            pitch.unsqueeze(-1),            # 1
-            yaw.unsqueeze(-1),              # 1
-            x_progress.unsqueeze(-1),       # 1
-            y_centered.unsqueeze(-1),       # 1
-            z_altitude.unsqueeze(-1),       # 1
-            min_dist.unsqueeze(-1),         # 1
-            mean_dist.unsqueeze(-1),        # 1
-            time_left.unsqueeze(-1),        # 1
-        ], dim=-1)  # Total: 47
+            lidar, vx.unsqueeze(-1), vy.unsqueeze(-1), vz.unsqueeze(-1),
+            omega_x.unsqueeze(-1), omega_y.unsqueeze(-1), omega_z.unsqueeze(-1),
+            roll.unsqueeze(-1), pitch.unsqueeze(-1), yaw.unsqueeze(-1),
+            x_progress.unsqueeze(-1), y_centered.unsqueeze(-1), z_altitude.unsqueeze(-1),
+            min_dist.unsqueeze(-1), mean_dist.unsqueeze(-1), time_left.unsqueeze(-1),
+        ], dim=-1)
         
         return {"policy": obs}
     
-    # ==================== COLLISION DETECTION ====================
-    
     def _check_collisions(self) -> tuple[torch.Tensor, dict]:
-        """
-        Check for collisions in all environments.
-        
-        Returns:
-            crashed: Boolean tensor [num_envs] - True if crashed
-            crash_info: Dict with breakdown by type
-        """
+        """Check for collisions with ground, ceiling, walls, and obstacle."""
         cfg = self.cfg
         pos = self._robot.data.root_pos_w
         x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
         
         half_w = cfg.corridor_width / 2
         
-        # Check each collision type
         hit_ground = z < 0.08
         hit_ceiling = z > cfg.corridor_height - 0.1
         hit_wall = y.abs() > (half_w - cfg.drone_radius)
         
-        # Obstacle collision
         hit_obstacle = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         if cfg.obstacle_enabled:
             dx = (x - cfg.obstacle_x).abs()
@@ -508,68 +403,41 @@ class CorridorEnv(DirectRLEnv):
         
         return crashed, crash_info
     
-    # ==================== REWARDS ====================
-    
     def _get_rewards(self) -> torch.Tensor:
-        """
-        Compute rewards for all environments.
-        
-        Reward structure:
-            - Forward progress: +10 * delta_x (reward moving toward goal)
-            - Backward penalty: -20 * delta_x (penalize going backward)
-            - Small time penalty: -0.1 per step (encourage efficiency)
-            - Crash penalty: -50
-            - Success bonus: +100
-        """
+        """Calculate rewards: forward progress, crash penalty, and success bonus."""
         pos = self._robot.data.root_pos_w
         x = pos[:, 0]
         
-        # Track max x reached
         self._episode_max_x = torch.maximum(self._episode_max_x, x)
         
-        # Forward progress reward
         delta_x = x - self._prev_x
         self._prev_x = x.clone()
         
-        # Reward for progress, penalty for going backward
         reward = torch.where(
             delta_x > 0,
-            delta_x * 10.0,    # Reward forward movement
-            delta_x * 20.0,    # Penalize backward movement (negative * positive = negative)
+            delta_x * 10.0,
+            delta_x * 20.0,
         )
         
-        # Time penalty (small, to encourage finishing quickly)
         reward = reward - 0.1
         
-        # Crash penalty
         crashed, _ = self._check_collisions()
         reward = reward - crashed.float() * 50.0
         
-        # Success bonus
         reached_goal = x >= self._goal_x
         reward = reward + reached_goal.float() * 100.0
         
         return reward
     
-    # ==================== TERMINATION ====================
-    
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Determine which episodes are done.
-        
-        Returns:
-            terminated: True if episode ended due to crash
-            truncated: True if episode ended due to timeout or success
-        """
+        """Determine episode termination and track statistics."""
         pos = self._robot.data.root_pos_w
         x = pos[:, 0]
         
-        # Check termination conditions
         crashed, crash_info = self._check_collisions()
         reached_goal = x >= self._goal_x
         timed_out = self.episode_length_buf >= self.max_episode_length - 1
         
-        # Update statistics for completed episodes
         done = crashed | reached_goal | timed_out
         
         if done.any():
@@ -583,34 +451,29 @@ class CorridorEnv(DirectRLEnv):
                 
                 if crashed[i]:
                     self._stats_crashes += 1
-                    # Track crash type
                     for ctype, mask in crash_info.items():
                         if mask[i]:
                             self._stats_crash_types[ctype] += 1
                             break
                 elif reached_goal[i]:
                     self._stats_successes += 1
-                else:  # timed_out
+                else:
                     self._stats_timeouts += 1
         
-        # terminated = crash, truncated = timeout or success
         return crashed, (timed_out | reached_goal)
     
-    # ==================== RESET ====================
-    
     def _reset_idx(self, env_ids=None):
-        """Reset specified environments."""
+        """Reset specified environments to initial state."""
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
         
         n = len(env_ids)
         self._robot.reset(env_ids)
         
-        # Set initial state
         state = self._robot.data.default_root_state[env_ids].clone()
-        state[:, 0] = 0.0  # x = 0
-        state[:, 1] = (torch.rand(n, device=self.device) - 0.5) * 0.5  # Small random y
-        state[:, 2] = self.cfg.target_altitude  # z = target altitude
+        state[:, 0] = 0.0
+        state[:, 1] = (torch.rand(n, device=self.device) - 0.5) * 0.5
+        state[:, 2] = self.cfg.target_altitude
         
         self._robot.write_root_pose_to_sim(state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(state[:, 7:], env_ids)
@@ -619,26 +482,13 @@ class CorridorEnv(DirectRLEnv):
         joint_vel = torch.zeros_like(joint_pos)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         
-        # Reset episode tracking
         self._episode_max_x[env_ids] = 0.0
         self._prev_x[env_ids] = 0.0
         
         super()._reset_idx(env_ids)
     
-    # ==================== STATISTICS ====================
-    
     def get_statistics(self) -> dict:
-        """
-        Get training statistics.
-        
-        Returns dict with:
-            - episodes: Total episodes completed
-            - success_rate: Percentage reaching goal
-            - crash_rate: Percentage crashing
-            - timeout_rate: Percentage timing out
-            - avg_distance: Average max distance reached
-            - crash_breakdown: Dict of crashes by type
-        """
+        """Return training statistics."""
         total = max(self._stats_episodes_completed, 1)
         
         return {
