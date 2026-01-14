@@ -1,20 +1,30 @@
-# Quadcopter Corridor Navigation with PPO and Dreamer (Isaac Lab)
+# Learning Sample-Efficient Vision-Based Quadcopter Navigation Using World Models in IsaacLab
 
-This repository extends **PyDreamerV1-DRL** with a complete experiment suite for
-**quadcopter corridor navigation**, implemented in **NVIDIA Isaac Lab (Isaac Sim 5.1)**.
-It provides a clean comparison between:
+This repository presents a **controlled experimental study** comparing **model-free** and **model-based** reinforcement learning for **quadcopter corridor navigation** in **NVIDIA Isaac Lab (Isaac Sim 5.1)**.
 
-- **PPO (model-free reinforcement learning)**  
-- **Dreamer (model-based world-model RL)**  
+The project extends **PyDreamerV1-DRL** with a **clean, reproducible experiment suite** designed to evaluate:
 
-under two conditions:
+- **PPO (model-free, on-policy reinforcement learning)**  
+- **Dreamer (model-based world-model reinforcement learning)**  
 
-1. **No obstacle** (straight corridor)  
-2. **Obstacle avoidance** (spherical obstruction at x=6.0 m)
+across increasingly challenging navigation scenarios.
 
-The project evaluates **sample efficiency**, **training stability**, and **final success rate** across both RL paradigms.
+The primary focus is on **sample efficiency**, **training stability**, and **final task success**, with particular attention to **planning under obstacle constraints**.
 
 ---
+
+# 🔬 Experimental Conditions
+
+All experiments are conducted under two task settings:
+
+1. **No Obstacle**  
+   A straight 10-meter corridor with no obstructions.
+
+2. **Obstacle Avoidance**  
+   A corridor containing a **rectangular obstacle centered at x = 6.0 m**, requiring anticipatory planning and rerouting.
+
+---
+
 
 # 📁 Repository Structure
 
